@@ -7,24 +7,19 @@
 ![Status](https://img.shields.io/badge/Status-Zakończony-success?style=for-the-badge)
 
 ### 1. Macierz Korelacji
-
-![Macierz Korelacji](korelacja.png)
+![Macierz Korelacji](Images/korelacja.png)
 
 ### 2. Rozkład danych
-
-![Rozkład](rozklad.png)
+![Rozkład](Images/rozklad.png)
 
 ### 3. Wykresy pudełkowe
-
-![Boxplot](boxplot.png)
+![Boxplot](Images/boxplot.png)
 
 ### 4. Biplot PCA
+![Biplot](Images/biplot.png)
 
-![Biplot](biplot.png)
-
-### 5. MDS
-
-![mds](MDS.png)
+### 5. Skalowanie Wielowymiarowe (MDS)
+![MDS](Images/MDS.png)
 
 ## Instrukcja Uruchomienia (How to Run)
 
@@ -38,4 +33,5 @@ Aby edytować kod lub wygenerować raport samodzielnie:
 1.  **Pobierz całe repozytorium** i rozpakuj je.
 2.  Upewnij się, że plik z danymi **`riceClassification.csv`** znajduje się w tym samym folderze co plik `.Rmd`.
 3.  Otwórz plik projektu (np. `Projekt_Redukcja_Wymiarow.Rmd`) w programie **RStudio**.
+
 4.  W razie potrzeby zainstaluj wymagane biblioteki
