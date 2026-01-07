@@ -1,0 +1,466 @@
+---
+title: "Analiza metod redukcji wymiarowości"
+author: "Radosław Siemek"
+output: 
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+Celem poniższego projektu jest analiza porównawcza trzech metod redukcji wymiarowości: Analizy Głównych Składowych (PCA), Skalowania Wielowymiarowego (MDS) oraz metody Sammona, pod kątem ich zdolności do wizualizacji danych na wykresie dwu lub trój wymiarowym przy minimalnej utracie informacji. W ramach analizy PCA zbadano wpływ wartości odstających na wyniki rzutowania, zestawiając wrażliwą na nie korelację Pearsona z bardziej odporną korelacją rang Spearmana. Całość projektu ma na celu sprawdzenie, która technika najlepiej zachowuje pierwotne informacje
+
+```{r message=FALSE, warning=FALSE, comment=NA, include=FALSE}
+library(corrplot)
+library(ggcorrplot)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(psych)
+library(MASS)
+library(factoextra)
+library(mice)
+```
+
+# Wczytanie i objaśnienie danych (EDA)
+
+```{r message=FALSE, warning=FALSE, comment=NA, include=FALSE}
+dane <- read.csv("riceClassification.csv")
+```
+
+## Podstawowe informacje o danych
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+str(dane)
+```
+
+`id` - unikalny identyfikator ziarna ryżu  
+`Area` - pole powierzchni ziarna (liczba pikseli w regionie ziarna)
+`MajorAxisLength` - długość głównej (najdłuższej) osi elipsy dopasowanej do kształtu ziarna.  
+`MinorAxisLength` - długość mniejszej (krótszej) osi tej samej elipsy  
+`Eccentricity` - mimośrodowość ziarna; im wyższa, tym bardziej „wydłużony” kształt  
+`ConvexArea` - pole powierzchni wypukłej otoczki ziarna ryżu  
+`EquivDiameter` - średnica koła o powierzchni równej powierzchni ziarna  
+`Extent` - stosunek powierzchni ziarna do powierzchni minimalnego prostokąta je obejmującego  
+`Perimeter` - obwód ziarna ryżu  
+`Roundness` - miara okrągłości ziarna (im wyższa, tym bardziej ziarno jest okrągłe)  
+`AspectRation` - stosunek długości do szerokości ziarna ryżu  
+`Class` - etykieta odmiany ryżu (0 - Gonen, 1 - Jasmin)
+
+Do dalszej analizy zmienne 'id' oraz 'Class' zostają usunięte, ponieważ 'id' to poprostu inkrementacja każdego wiersza a 'Class' nie niesie za sobą wartościowej informacji w kontekście PCA, dodatkowo traktowana byłaby jako zmienna liczbowa
+
+
+## Sprawdzenie czy występują braki danych
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+md.pattern(dane, plot=TRUE, rotate.names = TRUE)
+```
+
+Wykres przedstawiony powstał za pomocą funkcji `md.pattern()`, która dostępna jest w bibliotece `mice`. Przedstawia ona zwizualizowaną informację o zwaratości braku danych w zestawie danych. W przypadku wybranego przez nas zestawu można zauważyć że przy żadnej zmiennie nie została odnaleziony rekord bez wartości.  
+
+## Podstawowe statystyki
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+dane_final <- dane[,2:11]
+describe(dane_final)
+```
+
+Podstawowe statystyki opisowe wskazują, że w kontekście PCA należy użyć macierzy korelacji zamiast macierzy kowariancji z powodu różnych skal danych, np. bardzo wysokie wartości średniej, oddchylenia standardowego, minimum i maksimum zmiennej 'Area' 'ConvexArea' 'Perimeter' oraz bardzo niskie wartości takich zmiennych 'Extent','Roundness' mocno wskazują na potrzebe standaryzacji wyników
+
+## Rozkłady zmiennych oraz wykresy pudełkowe
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+dane_dlugie <- dane %>%
+  pivot_longer(
+    cols = -c(id, Class),
+    names_to = "Zmienna",
+    values_to = "Wartosc"
+  )
+```
+
+```{r echo=FALSE, warning=FALSE, comment=NA}
+p_boxploty <- ggplot(dane_dlugie, aes(x = Wartosc)) +
+  geom_boxplot(
+    fill = "lightblue", 
+    color = "black", 
+    alpha = 0.8
+  ) +
+    facet_wrap(~ Zmienna, 
+             scales = "free", 
+             ncol = 3) 
+p_boxploty
+```
+
+Powyższe wykresy pudełkowe wskazują, że występuje bardzo dużo outlierów w 5 zmiennych tj. 'Eccentricity', 'EquivDiameter','MajorAxisLength','Perimeter','Roundness'. Zgodnie z celem pracy outliery nie zostaną usunięte lub nie zostaną zmiennione, ponieważ w analizie PCA korelacje metodą Pearsona są wrażliwe na wartości odstające, natomiast korelacje obliczone metodą Spearmana nie są i zostanie zbadany ich wpływ w kontekście PCA.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+p_histogramy_ogolny <- ggplot(dane_dlugie, aes(x = Wartosc)) + 
+  
+  geom_histogram(
+    fill = "orange", 
+    color = "black", 
+    alpha = 0.8,
+    bins = 50 
+  ) +
+  
+  facet_wrap(~ Zmienna, 
+             scales = "free", 
+             ncol = 3) 
+
+p_histogramy_ogolny
+```
+
+Rozkłady zmiennych wskazują, że większość zmiennych posiada rozkład dwumodalny, co jest intuicyjnie wyczuwalne, ponieważ są 2 gatunki ryżu, które moża od siebie odróżnić, wyjątkami są zmienna 'Perimeter' która przypomina rozkład normalny oraz zmienna 'MajorAxisLength', która jest lekko lewostronnie skośny.
+
+## Macierz korelacji Pearsona oraz Spearmana
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+dane_cor_pearson <- cor(dane_final, method = "pearson")
+dane_cor_spear <- cor(dane_final, method = "spearman")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+ggcorrplot(dane_cor_pearson, 
+   hc.order = TRUE, 
+   outline.col = "white",
+   lab = TRUE,        
+   lab_size = 3,     
+   title = "Macierz korelacji Pearsona",
+   ggtheme = ggplot2::theme_gray,
+   colors = c("#6D9EC1", "white", "#E46726")) +
+   theme(
+     axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+     axis.text.y = element_text(size = 10)
+   )
+
+ggcorrplot(dane_cor_spear, 
+   hc.order = TRUE, 
+   outline.col = "white",
+   lab = TRUE,        
+   lab_size = 3,      
+   title = "Macierz korelacji Spearmana",
+   ggtheme = ggplot2::theme_gray,
+   colors = c("#6D9EC1", "white", "#E46726")) + 
+   theme(
+     axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+     axis.text.y = element_text(size = 10)
+   )
+
+```
+
+Z obu macierzy korealcji wynika, że prawie wszystkie zmienne są ze sobą skorelowane co jest pożądane w kontekście PCA
+Na obu macierz widać również wpływ różnych sposobów wyliecznia korelacji, prawdopodobnie przez wartości odstające. Wartości są do siebie zbliżone, a różnica nie jest jednokierunkowa (np. że są tylko zawyżone lub zaniżone). Spodziewanym było, że wartości macierzy liczony sposobem Pearsona będzie miał zawyżone wartości przez dwumodalny rozkład większości zmiennych, jednak to nie występuje
+
+
+# PCA
+
+PCA (Principal Component Analysis) służy do redukcji wymiarowości,żeby móc je przedstawić na wykresie 2d lub 3d, przy zachowaniu jak największej ilości informacji. Ta metoda tworzy zestawy z skorelowanych ze sobą zmiennych na nieskorelowane ze sobą grupy (główne składowe PC).Zaletami PCA są szybkość obliczeniowa, pozwala zobaczyć strukturę zbioru, który ma więcej niż 3 zmienne, ułatwia wykrycie grup oraz odfiltrowywuje mniej znaczące informacje.Wadami PCA są podatność na wartości odstające, zmienne powinny być ze sobą wysoko skorelowane oraz oczywista utrata informacji
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+# Spearman
+dane_rangi <- apply(dane_final, 2, rank)
+pca_spearman <- prcomp(dane_rangi, scale = TRUE)
+
+# Pearson
+pca_pearson <- prcomp(dane_final, center = TRUE, scale = TRUE)
+```
+
+Do wykonania redukcji wymiarów w obu przypadkach zostanie użyta funkcja 'prcomp' z tą różnicą, że funkcja wylicza z przedstawionych danych metodą pearsona, dlatego w przypadku spearmana, zostały do funkcji wrzucone obliczone rangi funkcją 'rank'. Argument 'scale' w funkcji 'prcomp' przy spearmanie jest d;atego żeby PCA zostało wykonane tak jak na macierzy korelacji. W przypadku pearsona zostały zestandaryzowane przy pomocy argumentu 'scale' oraz 'center' więc badanie opiera się na macierzy korelacji a nie kowariancji. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+print("Wariancje (metoda pearsona)")
+summary(pca_pearson)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+print("Wariancje (metoda spearmana)")
+summary(pca_spearman)
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+# pearson
+fviz_eig(pca_pearson, 
+         addlabels = TRUE, 
+         barfill = "#4E84C4",  
+         barcolor = "#4E84C4", 
+         linecolor = "black",  
+         ncp = 10) +           
+  ggtitle("Scree Plot (Metoda Pearsona)") +
+  labs(
+       x = "PC", 
+       y = "Procent wariancji") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 14)) 
+
+# spearman
+fviz_eig(pca_spearman, 
+         addlabels = TRUE, 
+         barfill = "#E7B800",  
+         barcolor = "#E7B800", 
+         linecolor = "black",
+         ncp = 10) +
+  ggtitle("Scree plot (Metoda Spearmana)") +
+  labs(
+       x = "PC", 
+       y = "Procent wariancji") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 14))
+```
+
+
+W obu przypadkach większość informacji znajduje się w głównych składowych 1 i 2 (PC1 i PC2), dla metody pearsona w PC1 wariancja wynosi 63.82 % oraz 26.06% dla PC2. Oznacza to, że te dwa wymiary stanowią aż 89.88% informacji w zbiorze.
+Dla metody spearmana PC1 wynosi 65.23% oraz 24.59% dla PC2 razem to 89.82 %. Dla późniejszej analizy zostaną użyte już 2 główne składowe PC1 i PC2. Warto zauważyć że po dodaniu trzeciego wymiaru PC3 dla obu metod wyjaśnienie danych byłoby większe o 8.39 % dla pearsona i 8.07% dla spearmana. Całościowo byłoby to 98.27% (pearson), 97.89% (spearman), natomiast dodanie 3 wymiaru uniemożliwa wizualizacje na płaszczyźnie i jest trudniejsza do odczytania. Wyższa wariancja metodą pearsona, wynika prawdopodobnie z tego, że działające na nią wartości odstające sztucznie ją zawyżają, mimo to różnice w wariancji nie są wysokie między oboma sposobami.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+# pearson
+ladunki <- as.data.frame(pca_pearson$rotation[, 1:2])
+ladunki_abs <- abs(ladunki)
+
+print("Najważniejsze zmienne dla PC1 (korelacja metoda pearsona)")
+ranking_pc1_p <- ladunki_abs[order(ladunki_abs$PC1, decreasing = TRUE), "PC1", drop = FALSE]
+ranking_pc1_p
+
+print("Najważniejsze zmienne dla PC2 (korelacja metoda pearsona)")
+ranking_pc2_p <- ladunki_abs[order(ladunki_abs$PC2, decreasing = TRUE), "PC2", drop = FALSE]
+ranking_pc2_p
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+# spearman
+ladunki <- as.data.frame(pca_spearman$rotation[, 1:2])
+ladunki_abs <- abs(ladunki)
+
+print("Najważniejsze zmienne dla PC1 (korelacja metoda spearmana)")
+ranking_pc1_p <- ladunki_abs[order(ladunki_abs$PC1, decreasing = TRUE), "PC1", drop = FALSE]
+ranking_pc1_p
+
+print("Najważniejsze zmienne dla PC2 (korelacja metoda spearmana)")
+ranking_pc2_p <- ladunki_abs[order(ladunki_abs$PC2, decreasing = TRUE), "PC2", drop = FALSE]
+ranking_pc2_p
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+# Pearson
+fviz_contrib(pca_pearson, choice = "var", axes = 1, top = 10) +
+  ggtitle("Udział zmiennych w PC1 (korelacja metodą pearsona)") +
+  geom_text(aes(label = round(contrib, 2)), vjust = -0.5, size = 3.5)
+
+fviz_contrib(pca_pearson, choice = "var", axes = 2, top = 10) +
+  ggtitle("Udział zmiennych w PC2 (korelacja metodą pearsona)") +
+  geom_text(aes(label = round(contrib, 2)), vjust = -0.5, size = 3.5)
+
+
+# spearman
+
+fviz_contrib(pca_spearman, choice = "var", axes = 1, top = 10) +
+  ggtitle("Udział zmiennych w PC1 (korelacja metodą spearmana)") +
+  geom_text(aes(label = round(contrib, 2)), vjust = -0.5, size = 3.5)
+
+fviz_contrib(pca_spearman, choice = "var", axes = 2, top = 10) +
+  ggtitle("Udział zmiennych w PC2 (korelacja metodą spearmana)") +
+  geom_text(aes(label = round(contrib, 2)), vjust = -0.5, size = 3.5)
+```
+
+Udział zmiennych w PC1 metodą pearsona jest rozłożony w miarę równomiernie pomiędzy czterema zmiennymi 'MinorAxisLength', 'Area','ConvexArea', 'EquivDiameter', gdzie każda ma po 0.37-0.38 współczynnika korelacji następnie następuje spadek i kolejne cztery zmienne mają podobny udział w tworzeniu PC1 oscylujący w okolicach 0.29-0.31, ostatnie dwie zmienne mają po 0.16 i 0.15 co nadal nie jest bardzo małą wartością.
+
+Udział zmiennych w PC2 metodą pearsona jest bardziej zdominowany przez zmienną 'MajorAxisLenght', wynik 0.56 współczynnika korelacji oznacza, że jest główna zmienną tworzącą PC2, następne 4 zmienne są do siebie zbliżone i zawierają ok 0.37 współczynnika. Natomiast ostatnia zmienna 'MinorAxisLength' nie tworzy znacząco PC2 (na poziomie 0.05)
+
+Udział zmiennych w PC1 i w PC2 metodą spearmana nie różni się znacząco od składników głównych składowych wymienionych wyżej. Natomiast zmianny następują głównie między zmiennymi z wysoką iloścą wartości odstających i są jeszcze bardziej zbliżone do siebie (na wykresie kolumny są sobie bardziej równe poziomem) udziałem co pokazuje, że metoda spearmana prawdopodobnie lepiej odwzorowywuje prawidłowość wyników
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+# pearson
+
+cor(dane_final, pca_pearson$x[,1:2])
+
+# spearman
+
+cor(dane_rangi, pca_spearman$x[,1:2])
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+# pearson
+fviz_pca_var(pca_pearson,
+             col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE,
+             title = "Zmienne PCA - Metoda Pearsona", 
+             ggtheme = theme_minimal())              
+
+# spearman
+fviz_pca_var(pca_spearman,
+             col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE,
+             title = "Zmienne PCA - Metoda Spearmana",
+             ggtheme = theme_minimal())
+```
+
+Wykres kołowy metody pearsona pokazuje, że zmienne 'Area', 'ConvexArea', 'EquivDiameter' mają niemalże identyczne dodatnie skorelowanie ze sobą (co jest zgodne z intuicją, ponieważ im pole powierzchni ziarenka ryżu większe tym również średnica okręgu jest większa) oraz, że w wysokim stopniu tworzą PC1, jedynie zmienna 'MinorAxisLength' jest jeszcze wyżej w stopniu tworzenia PC1. Zmienne 'AspectRation' oraz 'Eccentricity' również są ze sobą bardzo wysoko dodatnie skorelowane i one w największym stopniu budują PC2. Zmienne 'Roundness' oraz 'Eccentricity' oraz 'AspectRation' co ze sobą bardzo silnie ujemnie skorelowane, co również jest przewidywane, ponieważ im ziarnko ryżu jest podłużne (wydłużone) to tym mniej jest okrągłe. Praktycznie wszystkie zmienne zostały wyjaśnione w PC1 i w PC2 oprócz zmiennej 'Extent'.
+
+Wartości z wykresu kołowego metody spearmana właściwie ulegają tylko drobnej korekcji wartości z powodu outlierów. Nie ma drastycznych różnic
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+# Pearson
+fviz_pca_biplot(pca_pearson, 
+                geom.ind = "point", 
+                pointshape = 21,    
+                pointsize = 1,    
+                fill.ind = "lightgrey",  
+                col.var = "red",
+                font.var = "bold",
+                alpha.ind = 6,   
+                repel = TRUE,       
+                title = "Biplot PCA (Pearson)",
+                ggtheme = theme_minimal())
+
+# Spearman
+fviz_pca_biplot(pca_spearman, 
+                geom.ind = "point",
+                pointshape = 21,
+                pointsize = 1,
+                fill.ind = "lightgrey",
+                col.var = "red",
+                font.var = "bold",
+                alpha.ind = 6,
+                repel = TRUE,
+                title = "Biplot PCA (Spearman)",
+                ggtheme = theme_minimal())
+
+```
+
+Biplot (metoda Pearsona) jasno pokazuje podział na dwie grupy, która dzieli dwa gatunki ryżu. Zmienne odpowiadające za rozmiar tj. 'Area', 'MinorAxisLength', 'ConvexArea' w wysokim stopniu "ciągną" w prawą stronę osi PC1, co sugeruje ,że znajdują się tam bardziej masywne i szersze ziarenka ryż(prawdopodobnie odmiana Gonen) a po lewej podłużne ziarenka ryżu (prawdopodobnie Jasmin), widoczna jest również wysoka ilość wartości odstających
+
+Biplot (metoda Spearmana) pokazuje, że wartości odstające sztucznie zawyżały wartości PC2 w przypadku obliczeń korelacji metodą Pearsona. Udowadnia to, że metoda obliczenia korelacji spearmana niweluje wpływ outlierów oraz prezentuje lepiej czytelny podział na dwie grupy
+
+# Skalowanie Wielowymiarowe
+
+## Klasyczne skalowanie wielowymiarowe (MDS)
+
+Klasyczne skalowanie wielowymiarowe, zamiast analizować korelacje zmiennych jak w PCA, MDS analizuje odległości między obiektami. Algorytm tworzy tabele odległości każdego rekordu do każdego innego rekordu i próbuje ułożyć punkty na płaszczyźnie dwuwymiarowej. Zaletami MDS elastyczność co do wyboru odległości (np. euklidesowej, Manhattan) więc daje więcej możliwości podejścia do problemu niż PCA, wykrywanie naturalnych grup.Wadami MDS są wymagania obliczeniowe, brak informacji, która zmienna odpowiada za przesunięcie punktu w którąś ze stron
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+# Probka 
+set.seed(725) 
+indeksy_probki <- sample(1:nrow(dane), 5000) 
+
+dane_sample <- dane_final[indeksy_probki,]       
+
+dane_standard <- scale(dane_sample)
+dystanse <- dist(dane_standard, "euclidean")
+mds <- cmdscale(dystanse, k = 2, eig = TRUE)
+```
+
+Z uwagi na bardzo dużą ilość wierszów w datasecie, zostanie użyta losowo wybrana próbka 5000 obserwacji.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+wariancje_mds <- round(mds$eig / sum(mds$eig) * 100, 2)
+
+df_wariancje <- data.frame(
+  Wymiar = factor(1:length(wariancje_mds[1:8])), 
+  Wariancja = wariancje_mds[1:8]
+)
+
+ggplot(df_wariancje, aes(x = Wymiar, y = Wariancja)) +
+  geom_bar(stat = "identity", fill = "steelblue", color = "black", alpha = 0.7) +
+  geom_text(aes(label = paste0(Wariancja, "%")), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "MDS",
+       y = "Procent wyjaśnianej wariancji",
+       x = "Wymiar")
+gof <- mds$GOF
+print(paste("Goodness of fit (dla k=2):", round(gof[1], 4)))
+```
+
+W przypadku klasycznego skalowania wielowymiarowego, podział wariancji między głównymi składowymi powinien być taki sam jak w przypadku PCA (pod warunkiem, że jest wybrana odległość euklidesowa). W przypadku powyższego wykresu wyniki nie są identyczne z wynikami analizy PCA z powodu danych wziętych z próbki natomiast są zbliżone. GOF na poziomie 89% oznacza dobre wyjaśnienie wariancji dwóch wymiarów. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+klasy_sample <- as.factor(dane$Class[indeksy_probki])
+
+df_mds_mapa <- data.frame(
+  Dim1 = mds$points[,1],
+  Dim2 = mds$points[,2],
+  Gatunek = klasy_sample
+)
+
+ggplot(df_mds_mapa, aes(x = Dim1, y = Dim2, color = Gatunek)) +
+  geom_point(alpha = 0.5, size = 1.5) +
+  stat_ellipse(level = 0.95, linetype = 2) + 
+  scale_color_manual(values = c("steelblue", "orange"), 
+                     labels = c("Gonen", "Jasmine")) +
+  theme_minimal() +
+  labs(title = "MDS",
+       x = "Wymiar 1",
+       y = "Wymiar 2")
+```
+
+Klasyczne skalowanie wielowymiarowe bardzo dobrze rozróżnia dwie grupy ryżu, co znaczy że ziarenka ryżu mogą być odróżnione poprzez cechy w tym datasecie. 
+
+## Metoda Sammona
+
+Podobnie jak MDS, metoda Sammona próbuje przenieść punkty z wielu wymiarowów na płaszyczne dwuwymiarową, poprzez minimalizacje funkcji STRESS.
+Bazuje na odległości (tak jak MDS) z tym, żeby rekordy, które są do siebie podobne były blisko siebie na wykresie.Zaletami metody Sammona jest dobry podział na grupy, brak mocnej wrażliwości na outliery. Wadami metody Sammona jest to że jest znacznie wolniejsza od PCA, Dane nie mogą mieć duplikatów
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+dane_temp <- dane_final[indeksy_probki, ]
+dane_temp$Class <- as.factor(dane$Class[indeksy_probki])
+
+dane_unique_all <- unique(dane_temp)
+
+dane_do_sammona <- dane_unique_all[, 1:(ncol(dane_unique_all)-1)]
+klasy_do_wykresu <- dane_unique_all$Class
+
+dane_std_s <- scale(dane_do_sammona)
+dystanse_s <- dist(dane_std_s, method = "euclidean")
+
+sammon_fit <- sammon(dystanse_s, k = 2, trace = FALSE)
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+df_sammon <- data.frame(
+  Dim1 = sammon_fit$points[,1],
+  Dim2 = sammon_fit$points[,2],
+  Gatunek = klasy_do_wykresu 
+)
+
+# Wykres
+ggplot(df_sammon, aes(x = Dim1, y = Dim2, color = Gatunek)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  stat_ellipse(level = 0.95, linetype = 2) + 
+  scale_color_manual(values = c("steelblue", "orange"), labels = c("Gonen", "Jasmine")) +
+  theme_minimal() +
+  labs(title = "Metoda Sammona",
+       x = "Wymiar 1",
+       y = "Wymiar 2")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, comment=NA}
+print(paste("Wartość STRESS:", round(sammon_fit$stress, 4)))
+```
+
+Metoda Sammona, podobnie jak PCA i MDS, wyraźnie separuje obie grupy ryżu. Ułożenie punktów może się delikatnie różnić niż w klasycznym MDS, ponieważ metoda Sammona kładzie większy nacisk na zachowanie małych odległości. Wartości użyte do metody Sammona, również pochodzą z próbki (tej samej co w MDS). Wartość wskaźnika STRESS na poziomie 0.0262 oznacza, że redukcja do dwóch wymiarów wiąże się z bardzo małą utratą informacji.
+
+# Podsumowanie 
+
+W projekcie zostały przedstawione trzy metody redukcji wymiarowości: PCA, MDS oraz metoda Sammona. Celem było sprawdzenie, która z nich najlepiej poradzi sobie z wizualizacją danych o ziarnach ryżu na wykresie dwuwymiarowym.W PCA porównanie metody Pearsona i Spearmana pokazało, że wartości odstające zawyżały wariancję w metodzie Pearsona, metoda Spearmana uzyskała bardziej wiarygodny wynik, natomiast w obu przypadkach dwie pierwsze składowe (PC1 i PC2) wyjaśniły ok 90% informacji. Wyniki MDS były bardzo zbliżone (nie identyczne z powodu danych z próbki) do PCA oznacza to, że obie metody działają poprawnie, wizualizacja MDS potwierdziła, że w danych istnieją dwie wyraźne grupy.Metoda Sammona uzyskała wartość wskaźnika STRESS 0.0262 co oznacza doskonałe dopasowanie wykresu do rzeczywistych danych. Wizualizacja dokonana tą metodą również dała jasny podział na dwie grupy.
+
+Podsumowując najlepszą metodą do szybkiej redukcji jest PCA, metoda Sammona dała najdokładniejszy wynik pod kątem odległości między grupami
+
+
+
+
+
+
